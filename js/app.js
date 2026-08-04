@@ -25,6 +25,7 @@ const lineColorCtx = lineColorCanvas.getContext("2d");
 const brushCursor = document.getElementById("brushCursor");
 const canvasStack = document.getElementById("canvasStack");
 const canvasViewport = document.getElementById("canvasViewport");
+const canvasArea = document.getElementById("canvasArea");
 
 const colorPicker = document.getElementById("colorPicker");
 const brushSize = document.getElementById("brushSize");
@@ -507,11 +508,17 @@ function updateBrushCursor(evt) {
     return;
   }
 
-  const rect = linesCanvas.getBoundingClientRect();
-  const scale = rect.width / artworkWidth; // CSS px per canvas px
+  // Positioned relative to canvasArea (a plain, non-scrolling container)
+  // rather than canvasStack - the cursor previously lived inside the
+  // scrollable/zoomable canvasStack, which meant its own bounding box
+  // (drawn past the canvas edge for large brushes) counted as scrollable
+  // overflow and jittered the scrollbar on every mouse move.
+  const canvasRect = linesCanvas.getBoundingClientRect();
+  const areaRect = canvasArea.getBoundingClientRect();
+  const scale = canvasRect.width / artworkWidth; // CSS px per canvas px
   const diameter = Number(brushSize.value) * scale;
-  const localX = evt.clientX - rect.left;
-  const localY = evt.clientY - rect.top;
+  const localX = evt.clientX - areaRect.left;
+  const localY = evt.clientY - areaRect.top;
 
   brushCursor.style.width = `${diameter}px`;
   brushCursor.style.height = `${diameter}px`;

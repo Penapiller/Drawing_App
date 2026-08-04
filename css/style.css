@@ -146,6 +146,7 @@ input[type="range"] {
 }
 
 #canvasArea {
+  position: relative;
   min-width: 0;
 }
 

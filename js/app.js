@@ -197,7 +197,7 @@ async function init() {
 // Redraws paintCanvas from every visible regular layer (bottom to top,
 // each with its own blend mode), clipped to the body mask; and redraws
 // lineColorCanvas from the Line Color target, clipped to the ink's own
-// shape (shown on screen with a CSS screen blend against the black ink).
+// shape (shown normally, layered on top of the black ink).
 function compositePaint() {
   paintCtx.clearRect(0, 0, artworkWidth, artworkHeight);
 
@@ -344,6 +344,11 @@ function hexToRgb(hex) {
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
 }
 
+function hexToRgba(hex, alpha) {
+  const [r, g, b] = hexToRgb(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function getCanvasPoint(evt) {
   const rect = linesCanvas.getBoundingClientRect();
   const scaleX = artworkWidth / rect.width;
@@ -379,6 +384,52 @@ function drawActionSegment(from, to) {
   tempActionCtx.moveTo(from.x, from.y);
   tempActionCtx.lineTo(to.x, to.y);
   tempActionCtx.stroke();
+}
+
+// Airbrush: unlike the other tools, it keeps depositing paint the longer
+// it's held over one spot, like a real spray can. A timer repeatedly
+// stamps a soft (radial-gradient) dab at the tracked pointer position
+// while the pointer is down, independent of whether it's moving. Each
+// dab is low-alpha and drawn with normal source-over, so overlapping
+// dabs naturally build toward full opacity at the center while the
+// feathered edges stay gradual - no special blending trick needed.
+const AIRBRUSH_INTERVAL_MS = 40;
+const AIRBRUSH_DAB_ALPHA = 0.08;
+let airbrushIntervalId = null;
+
+function stampAirbrushDab(point) {
+  const radius = getPressureAdjustedSize(point.pressure) / 2;
+  if (radius <= 0) return;
+
+  const gradient = tempActionCtx.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius);
+  gradient.addColorStop(0, hexToRgba(colorPicker.value, AIRBRUSH_DAB_ALPHA));
+  gradient.addColorStop(1, hexToRgba(colorPicker.value, 0));
+
+  tempActionCtx.globalCompositeOperation = "source-over";
+  tempActionCtx.globalAlpha = 1;
+  tempActionCtx.fillStyle = gradient;
+  tempActionCtx.beginPath();
+  tempActionCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  tempActionCtx.fill();
+}
+
+function startAirbrushLoop() {
+  stopAirbrushLoop();
+  airbrushIntervalId = setInterval(() => {
+    if (!isDrawing || currentTool !== "airbrush") {
+      stopAirbrushLoop();
+      return;
+    }
+    stampAirbrushDab(smoothedPoint);
+    compositePaint();
+  }, AIRBRUSH_INTERVAL_MS);
+}
+
+function stopAirbrushLoop() {
+  if (airbrushIntervalId !== null) {
+    clearInterval(airbrushIntervalId);
+    airbrushIntervalId = null;
+  }
 }
 
 // Permanently applies the in-progress action (tempActionCanvas) onto the
@@ -454,8 +505,15 @@ function attachPointerHandlers() {
     isDrawing = true;
     smoothedPoint = { ...point };
     tempActionCtx.clearRect(0, 0, artworkWidth, artworkHeight);
-    drawActionSegment(smoothedPoint, smoothedPoint);
-    compositePaint();
+
+    if (currentTool === "airbrush") {
+      stampAirbrushDab(smoothedPoint);
+      compositePaint();
+      startAirbrushLoop();
+    } else {
+      drawActionSegment(smoothedPoint, smoothedPoint);
+      compositePaint();
+    }
     linesCanvas.setPointerCapture(evt.pointerId);
   });
 
@@ -476,6 +534,15 @@ function attachPointerHandlers() {
       y: smoothedPoint.y + (raw.y - smoothedPoint.y) * followFactor,
       pressure: raw.pressure,
     };
+
+    if (currentTool === "airbrush") {
+      // The interval loop (see startAirbrushLoop) handles stamping and
+      // compositing on its own schedule - this just keeps the tracked
+      // position current so it stamps wherever the pointer actually is.
+      smoothedPoint = next;
+      return;
+    }
+
     drawActionSegment(smoothedPoint, next);
     smoothedPoint = next;
     compositePaint();
@@ -490,6 +557,7 @@ function attachPointerHandlers() {
     }
     if (!isDrawing) return;
     isDrawing = false;
+    stopAirbrushLoop();
     mergeActionIntoActiveLayer();
   }
 
@@ -563,7 +631,7 @@ function attachToolbarHandlers() {
   redoBtn.addEventListener("click", redo);
 
   layerBlendModeInput.addEventListener("change", () => {
-    if (isLinesActive()) return; // fixed to screen; select is disabled
+    if (isLinesActive()) return; // fixed to Normal; select is disabled
     const layer = getActiveLayer();
     if (!layer) return;
     layer.blendMode = layerBlendModeInput.value;
@@ -660,7 +728,7 @@ function renderLayerList() {
   // Special, always-present target for recoloring the permanent lineart.
   // Pinned above regular layers; it can't be deleted or reordered since
   // it isn't really part of the paint stack (it renders separately, on
-  // top of the ink, via a CSS screen blend).
+  // top of the ink).
   const linesLi = document.createElement("li");
   linesLi.className = "layer-row lines-row" + (isLinesActive() ? " active" : "");
 
@@ -764,7 +832,7 @@ function renderLayerList() {
   addLayerBtn.disabled = layers.length >= MAX_LAYERS;
 
   if (isLinesActive()) {
-    layerBlendModeInput.value = "screen";
+    layerBlendModeInput.value = "source-over";
     layerBlendModeInput.disabled = true;
     layerOpacityInput.value = Math.round(linesColorLayer.opacity * 100);
   } else {

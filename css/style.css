@@ -220,12 +220,11 @@ input[type="range"] {
 }
 
 /* Holds player-painted color for the lineart itself. It sits above the
-   permanent black ink and blends with "screen", which tints the ink
-   toward the painted color without ever touching the ink layer below -
-   the lines can be recolored but never erased or extended. */
+   permanent black ink with normal blending, so the picked color always
+   renders as picked, without ever touching the ink layer below - the
+   lines can be recolored but never erased or extended. */
 #lineColorCanvas {
   z-index: 3;
-  mix-blend-mode: screen;
   pointer-events: none;
 }
 

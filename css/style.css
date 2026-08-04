@@ -128,14 +128,14 @@ html, body {
   cursor: pointer;
 }
 
-#toolBlendMode {
+#layerBlendMode {
   padding: 6px;
   border-radius: 6px;
   border: 1px solid #ccc;
   font-size: 14px;
 }
 
-#toolBlendMode:disabled,
+#layerBlendMode:disabled,
 #toolStabilization:disabled {
   opacity: 0.4;
 }
@@ -176,6 +176,16 @@ input[type="range"] {
   cursor: none;
 }
 
+/* Holds player-painted color for the lineart itself. It sits above the
+   permanent black ink and blends with "screen", which tints the ink
+   toward the painted color without ever touching the ink layer below -
+   the lines can be recolored but never erased or extended. */
+#lineColorCanvas {
+  z-index: 3;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
 #brushCursor {
   position: absolute;
   border-radius: 50%;
@@ -183,7 +193,7 @@ input[type="range"] {
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
   pointer-events: none;
   display: none;
-  z-index: 3;
+  z-index: 4;
 }
 
 #layerList {
@@ -215,6 +225,14 @@ input[type="range"] {
 .layer-row.active {
   background: #fdeaf3;
   border-color: #e56fa5;
+}
+
+.layer-row.lines-row {
+  font-style: italic;
+  border-bottom: 1px solid #e6e1d8;
+  border-radius: 6px 6px 0 0;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
 }
 
 .layer-row .layer-name {

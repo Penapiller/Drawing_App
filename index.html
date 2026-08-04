@@ -19,10 +19,6 @@
       Color
       <input type="color" id="colorPicker" value="#ff8fc2">
     </label>
-    <label class="tool-field block">
-      Brush size
-      <input type="range" id="brushSize" min="2" max="60" value="18">
-    </label>
 
     <div class="tool-group vertical">
       <button id="undoBtn" type="button" title="Undo">Undo</button>
@@ -35,6 +31,7 @@
     <div id="canvasStack">
       <canvas id="paintCanvas"></canvas>
       <canvas id="linesCanvas"></canvas>
+      <canvas id="lineColorCanvas"></canvas>
       <div id="brushCursor"></div>
     </div>
   </div>
@@ -43,21 +40,16 @@
     <section class="panel" id="toolSettingsPanel">
       <h3>Brush Settings</h3>
       <label class="tool-field block">
+        Brush size
+        <input type="range" id="brushSize" min="2" max="60" value="18">
+      </label>
+      <label class="tool-field block">
         Opacity
         <input type="range" id="toolOpacity" min="1" max="100" value="100">
       </label>
       <label class="tool-field block">
         Stabilization
         <input type="range" id="toolStabilization" min="0" max="90" value="30">
-      </label>
-      <label class="tool-field block">
-        Blend mode
-        <select id="toolBlendMode">
-          <option value="source-over">Normal</option>
-          <option value="multiply">Multiply</option>
-          <option value="screen">Screen</option>
-          <option value="overlay">Overlay</option>
-        </select>
       </label>
     </section>
 
@@ -66,6 +58,15 @@
         <h3>Layers</h3>
         <button id="addLayerBtn" type="button" title="Add layer">+ New</button>
       </div>
+      <label class="tool-field block">
+        Blend mode (active layer)
+        <select id="layerBlendMode">
+          <option value="source-over">Normal</option>
+          <option value="multiply">Multiply</option>
+          <option value="screen">Screen</option>
+          <option value="overlay">Overlay</option>
+        </select>
+      </label>
       <ul id="layerList"></ul>
     </section>
   </aside>

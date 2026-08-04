@@ -12,17 +12,23 @@ const CURRENT_LINEART = {
 const MAX_HISTORY = 12;
 const MAX_LAYERS = 6;
 
+// Sentinel activeLayerId for the special "Line Color" target, which isn't
+// a real entry in the `layers` array (see below).
+const LINES_LAYER_ID = "lines-color";
+
 const linesCanvas = document.getElementById("linesCanvas");
 const paintCanvas = document.getElementById("paintCanvas");
+const lineColorCanvas = document.getElementById("lineColorCanvas");
 const linesCtx = linesCanvas.getContext("2d");
 const paintCtx = paintCanvas.getContext("2d");
+const lineColorCtx = lineColorCanvas.getContext("2d");
 const brushCursor = document.getElementById("brushCursor");
 
 const colorPicker = document.getElementById("colorPicker");
 const brushSize = document.getElementById("brushSize");
 const toolOpacityInput = document.getElementById("toolOpacity");
 const toolStabilizationInput = document.getElementById("toolStabilization");
-const toolBlendModeInput = document.getElementById("toolBlendMode");
+const layerBlendModeInput = document.getElementById("layerBlendMode");
 const clearBtn = document.getElementById("clearBtn");
 const undoBtn = document.getElementById("undoBtn");
 const redoBtn = document.getElementById("redoBtn");
@@ -30,34 +36,45 @@ const toolButtons = document.querySelectorAll(".tool-btn");
 const addLayerBtn = document.getElementById("addLayerBtn");
 const layerListEl = document.getElementById("layerList");
 
-// The colorable-area mask, static for the whole session once loaded.
+// The colorable-area mask (for regular layers) and the lineart's own ink
+// shape (for the Line Color target), both static once loaded.
 const maskCanvas = document.createElement("canvas");
 const maskCtx = maskCanvas.getContext("2d");
+const linesMaskCanvas = document.createElement("canvas");
+const linesMaskCtx = linesMaskCanvas.getContext("2d");
 
 // Holds only the in-progress brush/eraser/fill mark. It gets merged onto
-// the active layer (with the chosen opacity/blend mode) once the action
+// the active target (with the chosen tool opacity) once the action
 // finishes, which keeps opacity from compounding where a stroke overlaps
 // itself mid-drag.
 const tempActionCanvas = document.createElement("canvas");
 const tempActionCtx = tempActionCanvas.getContext("2d");
 
+// Scratch canvas used to preview the in-progress action merged onto its
+// target, without touching the real layer canvas until the stroke ends.
+const previewCanvas = document.createElement("canvas");
+const previewCtx = previewCanvas.getContext("2d");
+
 let artworkWidth = 0;
 let artworkHeight = 0;
-let maskBBox = null; // {x, y, width, height} - crops history snapshots
+let maskBBox = null; // {x, y, width, height} - crops regular-layer history snapshots
+let linesMaskBBox = null; // same, for the Line Color target
 
-let layers = []; // { id, name, visible, canvas, ctx }
-let activeLayerId = null;
+let layers = []; // { id, name, visible, blendMode, canvas, ctx }
+let linesColorLayer = null; // { id: LINES_LAYER_ID, name, visible, canvas, ctx }
+let activeLayerId = null; // a layers[].id, or LINES_LAYER_ID
 let nextLayerNumber = 1;
 
 let currentTool = "brush";
 let isDrawing = false;
 let smoothedPoint = null;
 
-// Connected-component labeling of the mask, so the fill tool can color
-// just the shape that was clicked instead of the whole mask at once.
+// Connected-component labeling, so the fill tool only colors the shape
+// that was clicked - one for the body mask, one for the lineart's ink.
 let regionLabelMap = null; // Int32Array, 0 = not colorable, >0 = region id
+let linesRegionLabelMap = null;
 
-let history = []; // [{ activeLayerId, layers: [{id, name, visible, imageData}] }]
+let history = []; // [{ activeLayerId, layers: [...], linesColor: {...} }]
 let historyIndex = -1;
 
 function loadImage(src) {
@@ -77,13 +94,26 @@ function createLayer(name) {
     id: `layer-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     name,
     visible: true,
+    blendMode: "source-over",
     canvas,
     ctx: canvas.getContext("2d"),
   };
 }
 
+function isLinesActive() {
+  return activeLayerId === LINES_LAYER_ID;
+}
+
 function getActiveLayer() {
   return layers.find((layer) => layer.id === activeLayerId);
+}
+
+function getActiveTargetCtx() {
+  return isLinesActive() ? linesColorLayer.ctx : getActiveLayer()?.ctx;
+}
+
+function getActiveRegionLabelMap() {
+  return isLinesActive() ? linesRegionLabelMap : regionLabelMap;
 }
 
 async function init() {
@@ -95,17 +125,41 @@ async function init() {
   artworkWidth = linesImg.naturalWidth;
   artworkHeight = linesImg.naturalHeight;
 
-  for (const canvas of [linesCanvas, paintCanvas, maskCanvas, tempActionCanvas]) {
+  for (const canvas of [
+    linesCanvas,
+    paintCanvas,
+    lineColorCanvas,
+    maskCanvas,
+    linesMaskCanvas,
+    tempActionCanvas,
+    previewCanvas,
+  ]) {
     canvas.width = artworkWidth;
     canvas.height = artworkHeight;
   }
 
   linesCtx.drawImage(linesImg, 0, 0);
   maskCtx.drawImage(colorableImg, 0, 0);
+  linesMaskCtx.drawImage(linesImg, 0, 0); // the ink's own alpha is its mask
 
-  const regions = computeRegionLabels(maskCtx, artworkWidth, artworkHeight);
-  regionLabelMap = regions.labelMap;
-  maskBBox = regions.bbox;
+  const bodyRegions = computeRegionLabels(maskCtx, artworkWidth, artworkHeight);
+  regionLabelMap = bodyRegions.labelMap;
+  maskBBox = bodyRegions.bbox;
+
+  const lineRegions = computeRegionLabels(linesMaskCtx, artworkWidth, artworkHeight);
+  linesRegionLabelMap = lineRegions.labelMap;
+  linesMaskBBox = lineRegions.bbox;
+
+  const linesColorCanvasInner = document.createElement("canvas");
+  linesColorCanvasInner.width = artworkWidth;
+  linesColorCanvasInner.height = artworkHeight;
+  linesColorLayer = {
+    id: LINES_LAYER_ID,
+    name: "Line Color",
+    visible: true,
+    canvas: linesColorCanvasInner,
+    ctx: linesColorCanvasInner.getContext("2d"),
+  };
 
   const firstLayer = createLayer(`Layer ${nextLayerNumber++}`);
   layers = [firstLayer];
@@ -120,30 +174,61 @@ async function init() {
   attachLayerHandlers();
 }
 
-// Redraws paintCanvas from every visible layer (bottom to top), plus the
-// in-progress action on the active layer if a stroke is underway, then
-// clips the whole result to maskCanvas's shape.
+// Redraws paintCanvas from every visible regular layer (bottom to top,
+// each with its own blend mode), clipped to the body mask; and redraws
+// lineColorCanvas from the Line Color target, clipped to the ink's own
+// shape (shown on screen with a CSS screen blend against the black ink).
 function compositePaint() {
   paintCtx.clearRect(0, 0, artworkWidth, artworkHeight);
 
   for (const layer of layers) {
     if (!layer.visible) continue;
 
-    paintCtx.globalAlpha = 1;
-    paintCtx.globalCompositeOperation = "source-over";
-    paintCtx.drawImage(layer.canvas, 0, 0);
-
-    if (isDrawing && layer.id === activeLayerId) {
-      paintCtx.globalAlpha = getToolOpacity();
-      paintCtx.globalCompositeOperation = getMergeBlendMode();
-      paintCtx.drawImage(tempActionCanvas, 0, 0);
+    let sourceCanvas = layer.canvas;
+    if (isDrawing && !isLinesActive() && layer.id === activeLayerId) {
+      sourceCanvas = buildPreviewCanvas(layer.canvas);
     }
+
+    paintCtx.globalAlpha = 1;
+    paintCtx.globalCompositeOperation = layer.blendMode;
+    paintCtx.drawImage(sourceCanvas, 0, 0);
   }
 
   paintCtx.globalAlpha = 1;
   paintCtx.globalCompositeOperation = "destination-in";
   paintCtx.drawImage(maskCanvas, 0, 0);
   paintCtx.globalCompositeOperation = "source-over";
+
+  lineColorCtx.clearRect(0, 0, artworkWidth, artworkHeight);
+  if (linesColorLayer.visible) {
+    let sourceCanvas = linesColorLayer.canvas;
+    if (isDrawing && isLinesActive()) {
+      sourceCanvas = buildPreviewCanvas(linesColorLayer.canvas);
+    }
+
+    lineColorCtx.globalAlpha = 1;
+    lineColorCtx.globalCompositeOperation = "source-over";
+    lineColorCtx.drawImage(sourceCanvas, 0, 0);
+    lineColorCtx.globalCompositeOperation = "destination-in";
+    lineColorCtx.drawImage(linesMaskCanvas, 0, 0);
+    lineColorCtx.globalCompositeOperation = "source-over";
+  }
+}
+
+// Returns a scratch canvas showing `baseCanvas` with the in-progress
+// action merged on top at the current tool opacity, for live preview
+// only - the real layer canvas isn't touched until the stroke ends.
+function buildPreviewCanvas(baseCanvas) {
+  previewCtx.clearRect(0, 0, artworkWidth, artworkHeight);
+  previewCtx.globalAlpha = 1;
+  previewCtx.globalCompositeOperation = "source-over";
+  previewCtx.drawImage(baseCanvas, 0, 0);
+  previewCtx.globalAlpha = getToolOpacity();
+  previewCtx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
+  previewCtx.drawImage(tempActionCanvas, 0, 0);
+  previewCtx.globalAlpha = 1;
+  previewCtx.globalCompositeOperation = "source-over";
+  return previewCanvas;
 }
 
 function getToolOpacity() {
@@ -154,15 +239,10 @@ function getStabilizationFactor() {
   return Number(toolStabilizationInput.value) / 100; // 0 - 0.9
 }
 
-function getMergeBlendMode() {
-  return currentTool === "eraser" ? "destination-out" : toolBlendModeInput.value;
-}
-
-// Groups the mask's opaque pixels into connected shapes (flood fill), so
-// the fill tool only colors the one shape that was clicked. For the
-// current single-piece lineart this is one big region, but this keeps
-// the fill tool correct once linearts have separate colorable pieces.
-// Also returns the mask's pixel bounding box, used to keep undo history
+// Groups a mask's opaque pixels into connected shapes (flood fill), so
+// the fill tool only colors the one shape that was clicked. Used for
+// both the body's colorable mask and the lineart's own ink shape. Also
+// returns the mask's pixel bounding box, used to keep undo history
 // snapshots small instead of storing the whole (mostly-empty) canvas.
 function computeRegionLabels(ctx, width, height) {
   const { data } = ctx.getImageData(0, 0, width, height);
@@ -267,17 +347,18 @@ function drawActionSegment(from, to) {
 }
 
 // Permanently applies the in-progress action (tempActionCanvas) onto the
-// active layer, using the current tool opacity/blend mode, then clears
-// the action canvas and records the result in undo history.
+// active target (a regular layer, or the Line Color target), using the
+// current tool opacity, then clears the action canvas and records the
+// result in undo history.
 function mergeActionIntoActiveLayer() {
-  const layer = getActiveLayer();
-  if (!layer) return;
+  const ctx = getActiveTargetCtx();
+  if (!ctx) return;
 
-  layer.ctx.globalAlpha = getToolOpacity();
-  layer.ctx.globalCompositeOperation = getMergeBlendMode();
-  layer.ctx.drawImage(tempActionCanvas, 0, 0);
-  layer.ctx.globalAlpha = 1;
-  layer.ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = getToolOpacity();
+  ctx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
+  ctx.drawImage(tempActionCanvas, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
 
   tempActionCtx.clearRect(0, 0, artworkWidth, artworkHeight);
   compositePaint();
@@ -289,17 +370,18 @@ function fillRegionAt(point) {
   const y = Math.floor(point.y);
   if (x < 0 || y < 0 || x >= artworkWidth || y >= artworkHeight) return;
 
+  const labelMap = getActiveRegionLabelMap();
   const idx = y * artworkWidth + x;
-  const label = regionLabelMap[idx];
-  if (label === 0) return; // clicked outside the colorable area
+  const label = labelMap[idx];
+  if (label === 0) return; // clicked outside the colorable/ink area
 
   tempActionCtx.clearRect(0, 0, artworkWidth, artworkHeight);
   const imageData = tempActionCtx.createImageData(artworkWidth, artworkHeight);
   const data = imageData.data;
   const [r, g, b] = hexToRgb(colorPicker.value);
 
-  for (let i = 0; i < regionLabelMap.length; i++) {
-    if (regionLabelMap[i] === label) {
+  for (let i = 0; i < labelMap.length; i++) {
+    if (labelMap[i] === label) {
       const o = i * 4;
       data[o] = r;
       data[o + 1] = g;
@@ -387,7 +469,6 @@ function setActiveTool(tool) {
   toolButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.tool === tool));
   linesCanvas.style.cursor = tool === "fill" ? "pointer" : "none";
   toolStabilizationInput.disabled = tool === "fill";
-  toolBlendModeInput.disabled = tool === "eraser";
   if (tool === "fill") hideBrushCursor();
 }
 
@@ -398,18 +479,27 @@ function attachToolbarHandlers() {
   setActiveTool(currentTool);
 
   clearBtn.addEventListener("click", () => {
-    const layer = getActiveLayer();
-    if (!layer) return;
-    layer.ctx.clearRect(0, 0, artworkWidth, artworkHeight);
+    const ctx = getActiveTargetCtx();
+    if (!ctx) return;
+    ctx.clearRect(0, 0, artworkWidth, artworkHeight);
     compositePaint();
     recordHistory();
   });
 
   undoBtn.addEventListener("click", undo);
   redoBtn.addEventListener("click", redo);
+
+  layerBlendModeInput.addEventListener("change", () => {
+    if (isLinesActive()) return; // fixed to screen; select is disabled
+    const layer = getActiveLayer();
+    if (!layer) return;
+    layer.blendMode = layerBlendModeInput.value;
+    compositePaint();
+    recordHistory();
+  });
 }
 
-// --- Layers ------------------------------------------------------------
+// --- Layers --------------------------------------------------------------
 
 function attachLayerHandlers() {
   addLayerBtn.addEventListener("click", addLayer);
@@ -453,6 +543,38 @@ function moveLayer(fromIndex, toIndex) {
 
 function renderLayerList() {
   layerListEl.innerHTML = "";
+
+  // Special, always-present target for recoloring the permanent lineart.
+  // Pinned above regular layers; it can't be deleted or reordered since
+  // it isn't really part of the paint stack (it renders separately, on
+  // top of the ink, via a CSS screen blend).
+  const linesLi = document.createElement("li");
+  linesLi.className = "layer-row lines-row" + (isLinesActive() ? " active" : "");
+
+  const linesVisBtn = document.createElement("button");
+  linesVisBtn.type = "button";
+  linesVisBtn.textContent = linesColorLayer.visible ? "\u{1F441}" : "\u{1F6AB}";
+  linesVisBtn.title = linesColorLayer.visible ? "Hide line coloring" : "Show line coloring";
+  linesVisBtn.addEventListener("click", (evt) => {
+    evt.stopPropagation();
+    linesColorLayer.visible = !linesColorLayer.visible;
+    compositePaint();
+    renderLayerList();
+    recordHistory();
+  });
+
+  const linesNameSpan = document.createElement("span");
+  linesNameSpan.className = "layer-name";
+  linesNameSpan.textContent = linesColorLayer.name;
+  linesNameSpan.title = "Color the lineart itself - can't remove or extend it";
+
+  linesLi.addEventListener("click", () => {
+    activeLayerId = LINES_LAYER_ID;
+    renderLayerList();
+  });
+
+  linesLi.append(linesVisBtn, linesNameSpan);
+  layerListEl.appendChild(linesLi);
 
   // Top of the stack is drawn last, so show it first in the list (matches
   // how most layer panels order things).
@@ -527,13 +649,23 @@ function renderLayerList() {
   }
 
   addLayerBtn.disabled = layers.length >= MAX_LAYERS;
+
+  if (isLinesActive()) {
+    layerBlendModeInput.value = "screen";
+    layerBlendModeInput.disabled = true;
+  } else {
+    const layer = getActiveLayer();
+    layerBlendModeInput.value = layer ? layer.blendMode : "source-over";
+    layerBlendModeInput.disabled = false;
+  }
 }
 
-// --- Undo / redo ---------------------------------------------------------
-// Each history entry is a snapshot of every layer's pixels (cropped to the
-// mask's bounding box to keep memory down) plus which layer was active.
-// Undo/redo just move a pointer through these snapshots and rebuild the
-// layer list from whichever one it lands on.
+// --- Undo / redo -----------------------------------------------------------
+// Each history entry is a snapshot of every regular layer's pixels plus
+// the Line Color target's pixels (all cropped to their mask's bounding
+// box to keep memory down), plus which target was active. Undo/redo just
+// move a pointer through these snapshots and rebuild everything from
+// whichever one it lands on.
 
 function snapshotLayers() {
   const { x, y, width, height } = maskBBox;
@@ -541,14 +673,20 @@ function snapshotLayers() {
     id: layer.id,
     name: layer.name,
     visible: layer.visible,
+    blendMode: layer.blendMode,
     imageData: layer.ctx.getImageData(x, y, width, height),
   }));
 }
 
 function recordHistory() {
+  const { x, y, width, height } = linesMaskBBox;
   const snapshot = {
     activeLayerId,
     layers: snapshotLayers(),
+    linesColor: {
+      visible: linesColorLayer.visible,
+      imageData: linesColorLayer.ctx.getImageData(x, y, width, height),
+    },
   };
 
   history = history.slice(0, historyIndex + 1);
@@ -572,8 +710,20 @@ function restoreHistory(index) {
     canvas.height = artworkHeight;
     const ctx = canvas.getContext("2d");
     ctx.putImageData(entry.imageData, x, y);
-    return { id: entry.id, name: entry.name, visible: entry.visible, canvas, ctx };
+    return {
+      id: entry.id,
+      name: entry.name,
+      visible: entry.visible,
+      blendMode: entry.blendMode,
+      canvas,
+      ctx,
+    };
   });
+
+  linesColorLayer.visible = snapshot.linesColor.visible;
+  linesColorLayer.ctx.clearRect(0, 0, artworkWidth, artworkHeight);
+  linesColorLayer.ctx.putImageData(snapshot.linesColor.imageData, linesMaskBBox.x, linesMaskBBox.y);
+
   activeLayerId = snapshot.activeLayerId;
   historyIndex = index;
 

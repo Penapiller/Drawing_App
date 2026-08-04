@@ -387,15 +387,20 @@ function drawActionSegment(from, to) {
 }
 
 // Airbrush: unlike the other tools, it keeps depositing paint the longer
-// it's held over one spot, like a real spray can. A timer repeatedly
-// stamps a soft (radial-gradient) dab at the tracked pointer position
-// while the pointer is down, independent of whether it's moving. Each
-// dab is low-alpha and drawn with normal source-over, so overlapping
-// dabs naturally build toward full opacity at the center while the
-// feathered edges stay gradual - no special blending trick needed.
-const AIRBRUSH_INTERVAL_MS = 40;
-const AIRBRUSH_DAB_ALPHA = 0.08;
+// it's held over one spot, like a real spray can, and lays down a soft
+// (radial-gradient) dab instead of a hard-edged line. Two things trigger
+// a dab: moving far enough from the last dab (so a normal drag gets
+// dense, consistent coverage no matter how fast it's moving - stamping
+// on a fixed timer alone left fast drags almost blank, since the pointer
+// had already moved on before the next tick), and a timer that fires
+// regardless of movement (so holding still keeps building up). Each dab
+// is low-alpha and drawn with normal source-over, so overlapping dabs
+// naturally build toward full opacity at the center while the feathered
+// edges stay gradual - no special blending trick needed.
+const AIRBRUSH_INTERVAL_MS = 30;
+const AIRBRUSH_DAB_ALPHA = 0.22;
 let airbrushIntervalId = null;
+let lastAirbrushStampPoint = null;
 
 function stampAirbrushDab(point) {
   const radius = getPressureAdjustedSize(point.pressure) / 2;
@@ -411,6 +416,45 @@ function stampAirbrushDab(point) {
   tempActionCtx.beginPath();
   tempActionCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
   tempActionCtx.fill();
+
+  lastAirbrushStampPoint = { ...point };
+}
+
+// Called from pointermove while airbrushing. Stamps a dab if the pointer
+// has moved far enough since the last one - the threshold scales with
+// the current brush size so dabs always overlap enough for solid
+// coverage, whether the brush is tiny or huge. If the pointer jumped
+// further than that in one move event (coarse pointer polling, or a
+// fast flick), stamps are interpolated along the path between the two
+// points instead of just at the endpoint, so fast strokes don't end up
+// as a dotted line with gaps.
+function maybeStampAirbrushDabForMove(point) {
+  if (!lastAirbrushStampPoint) {
+    stampAirbrushDab(point);
+    compositePaint();
+    return;
+  }
+
+  // Captured now, before the loop below starts reassigning
+  // lastAirbrushStampPoint on every stamp - otherwise later steps would
+  // drift, interpolating from an already-moved point instead of here.
+  const startPoint = lastAirbrushStampPoint;
+  const diameter = getPressureAdjustedSize(point.pressure);
+  const minSpacing = Math.max(1.5, diameter * 0.12);
+  const dx = point.x - startPoint.x;
+  const dy = point.y - startPoint.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < minSpacing) return;
+
+  const steps = Math.floor(dist / minSpacing);
+  for (let i = 1; i <= steps; i++) {
+    stampAirbrushDab({
+      x: startPoint.x + (dx * i) / steps,
+      y: startPoint.y + (dy * i) / steps,
+      pressure: point.pressure,
+    });
+  }
+  compositePaint();
 }
 
 function startAirbrushLoop() {
@@ -507,6 +551,7 @@ function attachPointerHandlers() {
     tempActionCtx.clearRect(0, 0, artworkWidth, artworkHeight);
 
     if (currentTool === "airbrush") {
+      lastAirbrushStampPoint = null;
       stampAirbrushDab(smoothedPoint);
       compositePaint();
       startAirbrushLoop();
@@ -536,10 +581,8 @@ function attachPointerHandlers() {
     };
 
     if (currentTool === "airbrush") {
-      // The interval loop (see startAirbrushLoop) handles stamping and
-      // compositing on its own schedule - this just keeps the tracked
-      // position current so it stamps wherever the pointer actually is.
       smoothedPoint = next;
+      maybeStampAirbrushDabForMove(next);
       return;
     }
 

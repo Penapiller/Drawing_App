@@ -47,8 +47,13 @@ html, body {
   cursor: pointer;
 }
 
+.tool-group {
+  display: flex;
+  gap: 6px;
+}
+
+.tool-group button,
 #clearBtn {
-  margin-left: auto;
   padding: 8px 14px;
   border: 1px solid #ccc;
   border-radius: 6px;
@@ -57,8 +62,25 @@ html, body {
   font-size: 14px;
 }
 
+#clearBtn {
+  margin-left: auto;
+}
+
+.tool-group button:hover,
 #clearBtn:hover {
   background: #f0f0f0;
+}
+
+.tool-btn.active {
+  background: #ff8fc2;
+  border-color: #e56fa5;
+  color: #fff;
+}
+
+.tool-group button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: #fff;
 }
 
 #canvasStack {

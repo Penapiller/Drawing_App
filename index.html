@@ -13,6 +13,7 @@
       <button type="button" class="tool-btn active" data-tool="brush">Brush</button>
       <button type="button" class="tool-btn" data-tool="eraser">Eraser</button>
       <button type="button" class="tool-btn" data-tool="fill">Fill</button>
+      <button type="button" class="tool-btn" data-tool="pan">Pan</button>
     </div>
 
     <label class="tool-field block">
@@ -28,11 +29,19 @@
   </aside>
 
   <div id="canvasArea">
-    <div id="canvasStack">
-      <canvas id="paintCanvas"></canvas>
-      <canvas id="linesCanvas"></canvas>
-      <canvas id="lineColorCanvas"></canvas>
-      <div id="brushCursor"></div>
+    <div id="zoomControls">
+      <button id="zoomOutBtn" type="button" title="Zoom out">−</button>
+      <span id="zoomLevelDisplay">100%</span>
+      <button id="zoomInBtn" type="button" title="Zoom in">+</button>
+      <button id="zoomResetBtn" type="button" title="Reset zoom">Reset</button>
+    </div>
+    <div id="canvasViewport">
+      <div id="canvasStack">
+        <canvas id="paintCanvas"></canvas>
+        <canvas id="linesCanvas"></canvas>
+        <canvas id="lineColorCanvas"></canvas>
+        <div id="brushCursor"></div>
+      </div>
     </div>
   </div>
 
@@ -51,6 +60,10 @@
         Stabilization
         <input type="range" id="toolStabilization" min="0" max="90" value="30">
       </label>
+      <label class="tool-field">
+        <input type="checkbox" id="pressureToggle" checked>
+        Pressure sensitivity
+      </label>
     </section>
 
     <section class="panel" id="layersPanel">
@@ -66,6 +79,10 @@
           <option value="screen">Screen</option>
           <option value="overlay">Overlay</option>
         </select>
+      </label>
+      <label class="tool-field block">
+        Opacity (active layer)
+        <input type="range" id="layerOpacity" min="1" max="100" value="100">
       </label>
       <ul id="layerList"></ul>
     </section>

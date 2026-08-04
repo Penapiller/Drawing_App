@@ -23,18 +23,30 @@ const linesCtx = linesCanvas.getContext("2d");
 const paintCtx = paintCanvas.getContext("2d");
 const lineColorCtx = lineColorCanvas.getContext("2d");
 const brushCursor = document.getElementById("brushCursor");
+const canvasStack = document.getElementById("canvasStack");
+const canvasViewport = document.getElementById("canvasViewport");
 
 const colorPicker = document.getElementById("colorPicker");
 const brushSize = document.getElementById("brushSize");
 const toolOpacityInput = document.getElementById("toolOpacity");
 const toolStabilizationInput = document.getElementById("toolStabilization");
+const pressureToggle = document.getElementById("pressureToggle");
 const layerBlendModeInput = document.getElementById("layerBlendMode");
+const layerOpacityInput = document.getElementById("layerOpacity");
 const clearBtn = document.getElementById("clearBtn");
 const undoBtn = document.getElementById("undoBtn");
 const redoBtn = document.getElementById("redoBtn");
 const toolButtons = document.querySelectorAll(".tool-btn");
 const addLayerBtn = document.getElementById("addLayerBtn");
 const layerListEl = document.getElementById("layerList");
+const zoomInBtn = document.getElementById("zoomInBtn");
+const zoomOutBtn = document.getElementById("zoomOutBtn");
+const zoomResetBtn = document.getElementById("zoomResetBtn");
+const zoomLevelDisplay = document.getElementById("zoomLevelDisplay");
+
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 3;
+const ZOOM_STEP = 0.25;
 
 // The colorable-area mask (for regular layers) and the lineart's own ink
 // shape (for the Line Color target), both static once loaded.
@@ -69,6 +81,10 @@ let currentTool = "brush";
 let isDrawing = false;
 let smoothedPoint = null;
 
+let zoomLevel = 1;
+let isPanning = false;
+let panStart = null; // { x, y, scrollLeft, scrollTop }
+
 // Connected-component labeling, so the fill tool only colors the shape
 // that was clicked - one for the body mask, one for the lineart's ink.
 let regionLabelMap = null; // Int32Array, 0 = not colorable, >0 = region id
@@ -95,6 +111,7 @@ function createLayer(name) {
     name,
     visible: true,
     blendMode: "source-over",
+    opacity: 1,
     canvas,
     ctx: canvas.getContext("2d"),
   };
@@ -157,6 +174,7 @@ async function init() {
     id: LINES_LAYER_ID,
     name: "Line Color",
     visible: true,
+    opacity: 1,
     canvas: linesColorCanvasInner,
     ctx: linesColorCanvasInner.getContext("2d"),
   };
@@ -172,6 +190,7 @@ async function init() {
   attachPointerHandlers();
   attachToolbarHandlers();
   attachLayerHandlers();
+  attachZoomHandlers();
 }
 
 // Redraws paintCanvas from every visible regular layer (bottom to top,
@@ -189,7 +208,7 @@ function compositePaint() {
       sourceCanvas = buildPreviewCanvas(layer.canvas);
     }
 
-    paintCtx.globalAlpha = 1;
+    paintCtx.globalAlpha = layer.opacity;
     paintCtx.globalCompositeOperation = layer.blendMode;
     paintCtx.drawImage(sourceCanvas, 0, 0);
   }
@@ -206,9 +225,10 @@ function compositePaint() {
       sourceCanvas = buildPreviewCanvas(linesColorLayer.canvas);
     }
 
-    lineColorCtx.globalAlpha = 1;
+    lineColorCtx.globalAlpha = linesColorLayer.opacity;
     lineColorCtx.globalCompositeOperation = "source-over";
     lineColorCtx.drawImage(sourceCanvas, 0, 0);
+    lineColorCtx.globalAlpha = 1;
     lineColorCtx.globalCompositeOperation = "destination-in";
     lineColorCtx.drawImage(linesMaskCanvas, 0, 0);
     lineColorCtx.globalCompositeOperation = "source-over";
@@ -330,14 +350,28 @@ function getCanvasPoint(evt) {
   return {
     x: (evt.clientX - rect.left) * scaleX,
     y: (evt.clientY - rect.top) * scaleY,
+    // Mouse/untouched-touch devices report 0 or a flat 0.5; only real
+    // pressure-sensitive styluses vary this meaningfully.
+    pressure: evt.pressure > 0 ? evt.pressure : 0.5,
   };
+}
+
+// Even at minimum pressure the stroke stays at least this fraction of
+// the chosen brush size, so light touches don't disappear entirely.
+const MIN_PRESSURE_RATIO = 0.25;
+
+function getPressureAdjustedSize(pressure) {
+  const base = Number(brushSize.value);
+  if (!pressureToggle.checked) return base;
+  const factor = MIN_PRESSURE_RATIO + (1 - MIN_PRESSURE_RATIO) * pressure;
+  return base * factor;
 }
 
 function drawActionSegment(from, to) {
   tempActionCtx.globalCompositeOperation = "source-over";
   tempActionCtx.globalAlpha = 1;
   tempActionCtx.strokeStyle = colorPicker.value;
-  tempActionCtx.lineWidth = Number(brushSize.value);
+  tempActionCtx.lineWidth = getPressureAdjustedSize(to.pressure);
   tempActionCtx.lineCap = "round";
   tempActionCtx.lineJoin = "round";
   tempActionCtx.beginPath();
@@ -396,6 +430,19 @@ function fillRegionAt(point) {
 
 function attachPointerHandlers() {
   linesCanvas.addEventListener("pointerdown", (evt) => {
+    if (currentTool === "pan") {
+      isPanning = true;
+      panStart = {
+        x: evt.clientX,
+        y: evt.clientY,
+        scrollLeft: canvasViewport.scrollLeft,
+        scrollTop: canvasViewport.scrollTop,
+      };
+      linesCanvas.style.cursor = "grabbing";
+      linesCanvas.setPointerCapture(evt.pointerId);
+      return;
+    }
+
     const point = getCanvasPoint(evt);
 
     if (currentTool === "fill") {
@@ -412,6 +459,12 @@ function attachPointerHandlers() {
   });
 
   linesCanvas.addEventListener("pointermove", (evt) => {
+    if (isPanning) {
+      canvasViewport.scrollLeft = panStart.scrollLeft - (evt.clientX - panStart.x);
+      canvasViewport.scrollTop = panStart.scrollTop - (evt.clientY - panStart.y);
+      return;
+    }
+
     updateBrushCursor(evt);
     if (!isDrawing) return;
 
@@ -420,6 +473,7 @@ function attachPointerHandlers() {
     const next = {
       x: smoothedPoint.x + (raw.x - smoothedPoint.x) * followFactor,
       y: smoothedPoint.y + (raw.y - smoothedPoint.y) * followFactor,
+      pressure: raw.pressure,
     };
     drawActionSegment(smoothedPoint, next);
     smoothedPoint = next;
@@ -427,6 +481,12 @@ function attachPointerHandlers() {
   });
 
   function endStroke() {
+    if (isPanning) {
+      isPanning = false;
+      panStart = null;
+      linesCanvas.style.cursor = "grab";
+      return;
+    }
     if (!isDrawing) return;
     isDrawing = false;
     mergeActionIntoActiveLayer();
@@ -442,7 +502,7 @@ function attachPointerHandlers() {
 }
 
 function updateBrushCursor(evt) {
-  if (currentTool === "fill") {
+  if (currentTool === "fill" || currentTool === "pan") {
     brushCursor.style.display = "none";
     return;
   }
@@ -467,9 +527,15 @@ function hideBrushCursor() {
 function setActiveTool(tool) {
   currentTool = tool;
   toolButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.tool === tool));
-  linesCanvas.style.cursor = tool === "fill" ? "pointer" : "none";
-  toolStabilizationInput.disabled = tool === "fill";
-  if (tool === "fill") hideBrushCursor();
+  if (tool === "fill") {
+    linesCanvas.style.cursor = "pointer";
+  } else if (tool === "pan") {
+    linesCanvas.style.cursor = "grab";
+  } else {
+    linesCanvas.style.cursor = "none";
+  }
+  toolStabilizationInput.disabled = tool === "fill" || tool === "pan";
+  if (tool === "fill" || tool === "pan") hideBrushCursor();
 }
 
 function attachToolbarHandlers() {
@@ -497,6 +563,46 @@ function attachToolbarHandlers() {
     compositePaint();
     recordHistory();
   });
+
+  // Live-update while dragging, but only commit one undo step when the
+  // slider is released - otherwise every intermediate tick would spam
+  // the history stack.
+  layerOpacityInput.addEventListener("input", () => {
+    const target = isLinesActive() ? linesColorLayer : getActiveLayer();
+    if (!target) return;
+    target.opacity = Number(layerOpacityInput.value) / 100;
+    compositePaint();
+  });
+  layerOpacityInput.addEventListener("change", () => {
+    recordHistory();
+  });
+}
+
+function attachZoomHandlers() {
+  zoomInBtn.addEventListener("click", () => setZoom(zoomLevel + ZOOM_STEP));
+  zoomOutBtn.addEventListener("click", () => setZoom(zoomLevel - ZOOM_STEP));
+  zoomResetBtn.addEventListener("click", () => setZoom(1));
+  setZoom(1);
+}
+
+// Scales canvasStack while keeping whatever's currently at the viewport's
+// center visually stable, and lets canvasViewport's native scrolling
+// handle panning into the overflow.
+function setZoom(newZoom) {
+  const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
+  const rect = canvasViewport.getBoundingClientRect();
+  const centerX = (canvasViewport.scrollLeft + rect.width / 2) / zoomLevel;
+  const centerY = (canvasViewport.scrollTop + rect.height / 2) / zoomLevel;
+
+  zoomLevel = clamped;
+  canvasStack.style.transform = `scale(${zoomLevel})`;
+  zoomLevelDisplay.textContent = `${Math.round(zoomLevel * 100)}%`;
+
+  canvasViewport.scrollLeft = centerX * zoomLevel - rect.width / 2;
+  canvasViewport.scrollTop = centerY * zoomLevel - rect.height / 2;
+
+  zoomOutBtn.disabled = zoomLevel <= MIN_ZOOM;
+  zoomInBtn.disabled = zoomLevel >= MAX_ZOOM;
 }
 
 // --- Layers --------------------------------------------------------------
@@ -653,10 +759,12 @@ function renderLayerList() {
   if (isLinesActive()) {
     layerBlendModeInput.value = "screen";
     layerBlendModeInput.disabled = true;
+    layerOpacityInput.value = Math.round(linesColorLayer.opacity * 100);
   } else {
     const layer = getActiveLayer();
     layerBlendModeInput.value = layer ? layer.blendMode : "source-over";
     layerBlendModeInput.disabled = false;
+    layerOpacityInput.value = layer ? Math.round(layer.opacity * 100) : 100;
   }
 }
 
@@ -674,6 +782,7 @@ function snapshotLayers() {
     name: layer.name,
     visible: layer.visible,
     blendMode: layer.blendMode,
+    opacity: layer.opacity,
     imageData: layer.ctx.getImageData(x, y, width, height),
   }));
 }
@@ -685,6 +794,7 @@ function recordHistory() {
     layers: snapshotLayers(),
     linesColor: {
       visible: linesColorLayer.visible,
+      opacity: linesColorLayer.opacity,
       imageData: linesColorLayer.ctx.getImageData(x, y, width, height),
     },
   };
@@ -715,12 +825,14 @@ function restoreHistory(index) {
       name: entry.name,
       visible: entry.visible,
       blendMode: entry.blendMode,
+      opacity: entry.opacity,
       canvas,
       ctx,
     };
   });
 
   linesColorLayer.visible = snapshot.linesColor.visible;
+  linesColorLayer.opacity = snapshot.linesColor.opacity;
   linesColorLayer.ctx.clearRect(0, 0, artworkWidth, artworkHeight);
   linesColorLayer.ctx.putImageData(snapshot.linesColor.imageData, linesMaskBBox.x, linesMaskBBox.y);
 

@@ -10,20 +10,99 @@ html, body {
 }
 
 #app {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 240px;
+  gap: 16px;
+  align-items: start;
+  max-width: 1100px;
+  margin: 0 auto;
   padding: 12px;
 }
 
-#toolbar {
+.panel {
+  background: #fff;
+  border: 1px solid #e6e1d8;
+  border-radius: 10px;
+  padding: 14px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel h3 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+}
+
+.panel-header {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-header h3 {
+  margin: 0;
+}
+
+#leftToolbar {
+  position: sticky;
+  top: 12px;
+}
+
+#rightPanel {
+  display: flex;
+  flex-direction: column;
   gap: 16px;
+  position: sticky;
+  top: 12px;
+}
+
+.tool-group {
+  display: flex;
+  gap: 6px;
+}
+
+.tool-group.vertical {
+  flex-direction: column;
+}
+
+.tool-group button,
+#clearBtn,
+#addLayerBtn {
+  padding: 8px 14px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.tool-group.vertical button {
   width: 100%;
-  max-width: 640px;
+}
+
+.tool-group button:hover,
+#clearBtn:hover,
+#addLayerBtn:hover {
+  background: #f0f0f0;
+}
+
+.tool-btn.active {
+  background: #ff8fc2;
+  border-color: #e56fa5;
+  color: #fff;
+}
+
+.tool-group button:disabled,
+#clearBtn:disabled,
+#addLayerBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: #fff;
 }
 
 .tool-field {
@@ -34,8 +113,14 @@ html, body {
   color: #444;
 }
 
+.tool-field.block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
 #colorPicker {
-  width: 44px;
+  width: 100%;
   height: 32px;
   border: none;
   padding: 0;
@@ -43,50 +128,30 @@ html, body {
   cursor: pointer;
 }
 
-#brushSize {
-  cursor: pointer;
-}
-
-.tool-group {
-  display: flex;
-  gap: 6px;
-}
-
-.tool-group button,
-#clearBtn {
-  padding: 8px 14px;
-  border: 1px solid #ccc;
+#toolBlendMode {
+  padding: 6px;
   border-radius: 6px;
-  background: #fff;
-  cursor: pointer;
+  border: 1px solid #ccc;
   font-size: 14px;
 }
 
-#clearBtn {
-  margin-left: auto;
-}
-
-.tool-group button:hover,
-#clearBtn:hover {
-  background: #f0f0f0;
-}
-
-.tool-btn.active {
-  background: #ff8fc2;
-  border-color: #e56fa5;
-  color: #fff;
-}
-
-.tool-group button:disabled {
+#toolBlendMode:disabled,
+#toolStabilization:disabled {
   opacity: 0.4;
-  cursor: not-allowed;
-  background: #fff;
+}
+
+input[type="range"] {
+  cursor: pointer;
+  width: 100%;
+}
+
+#canvasArea {
+  min-width: 0;
 }
 
 #canvasStack {
   position: relative;
   width: 100%;
-  max-width: 640px;
   aspect-ratio: 1 / 1;
   background: #ffffff;
   border-radius: 12px;
@@ -108,5 +173,103 @@ html, body {
 
 #linesCanvas {
   z-index: 2;
-  cursor: crosshair;
+  cursor: none;
+}
+
+#brushCursor {
+  position: absolute;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.7);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  display: none;
+  z-index: 3;
+}
+
+#layerList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.layer-row:hover {
+  background: #f6f3ee;
+}
+
+.layer-row.active {
+  background: #fdeaf3;
+  border-color: #e56fa5;
+}
+
+.layer-row .layer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-row button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.layer-row button:hover {
+  background: #e9e4da;
+}
+
+.layer-row button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+@media (max-width: 860px) {
+  #app {
+    grid-template-columns: 1fr;
+  }
+
+  #canvasArea {
+    order: 1;
+  }
+
+  #leftToolbar {
+    order: 2;
+    position: static;
+  }
+
+  #rightPanel {
+    order: 3;
+    position: static;
+  }
+
+  .tool-group.vertical {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .tool-group.vertical button {
+    width: auto;
+    flex: 1;
+  }
 }

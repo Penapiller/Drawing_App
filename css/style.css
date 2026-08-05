@@ -1,0 +1,335 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #faf7f2;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 240px;
+  gap: 16px;
+  align-items: start;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #e6e1d8;
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel h3 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-header h3 {
+  margin: 0;
+}
+
+#leftToolbar {
+  position: sticky;
+  top: 12px;
+}
+
+#rightPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 12px;
+}
+
+.tool-group {
+  display: flex;
+  gap: 6px;
+}
+
+.tool-group.vertical {
+  flex-direction: column;
+}
+
+.tool-group button,
+#clearBtn,
+#addLayerBtn {
+  padding: 8px 14px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.tool-group.vertical button {
+  width: 100%;
+}
+
+.tool-group button:hover,
+#clearBtn:hover,
+#addLayerBtn:hover {
+  background: #f0f0f0;
+}
+
+.tool-btn.active {
+  background: #ff8fc2;
+  border-color: #e56fa5;
+  color: #fff;
+}
+
+.tool-group button:disabled,
+#clearBtn:disabled,
+#addLayerBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: #fff;
+}
+
+.tool-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #444;
+}
+
+.tool-field.block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+#colorPicker {
+  width: 100%;
+  height: 32px;
+  border: none;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+
+#layerBlendMode {
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  font-size: 14px;
+}
+
+#layerBlendMode:disabled,
+#toolStabilization:disabled {
+  opacity: 0.4;
+}
+
+input[type="range"] {
+  cursor: pointer;
+  width: 100%;
+}
+
+#canvasArea {
+  position: relative;
+  min-width: 0;
+}
+
+#zoomControls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: #444;
+}
+
+#zoomControls button {
+  padding: 4px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+#zoomControls button:hover {
+  background: #f0f0f0;
+}
+
+#zoomControls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#zoomLevelDisplay {
+  min-width: 44px;
+  text-align: center;
+}
+
+/* Fixed-size window onto the (possibly zoomed-in) canvas. Scrolls to
+   pan when canvasStack is scaled beyond this box's bounds. */
+#canvasViewport {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: auto;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+
+#canvasStack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+  touch-action: none;
+}
+
+#canvasStack canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#paintCanvas {
+  z-index: 1;
+}
+
+#linesCanvas {
+  z-index: 2;
+  cursor: none;
+}
+
+/* Holds player-painted color for the lineart itself. It sits above the
+   permanent black ink with normal blending, so the picked color always
+   renders as picked, without ever touching the ink layer below - the
+   lines can be recolored but never erased or extended. */
+#lineColorCanvas {
+  z-index: 3;
+  pointer-events: none;
+}
+
+#brushCursor {
+  position: absolute;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.7);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  display: none;
+  z-index: 4;
+}
+
+#layerList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.layer-row:hover {
+  background: #f6f3ee;
+}
+
+.layer-row.active {
+  background: #fdeaf3;
+  border-color: #e56fa5;
+}
+
+.layer-row.lines-row {
+  font-style: italic;
+  border-bottom: 1px solid #e6e1d8;
+  border-radius: 6px 6px 0 0;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+}
+
+.layer-row .layer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-row button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.layer-row button:hover {
+  background: #e9e4da;
+}
+
+.layer-row button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+@media (max-width: 860px) {
+  #app {
+    grid-template-columns: 1fr;
+  }
+
+  #canvasArea {
+    order: 1;
+  }
+
+  #leftToolbar {
+    order: 2;
+    position: static;
+  }
+
+  #rightPanel {
+    order: 3;
+    position: static;
+  }
+
+  .tool-group.vertical {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .tool-group.vertical button {
+    width: auto;
+    flex: 1;
+  }
+}

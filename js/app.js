@@ -246,7 +246,9 @@ function buildPreviewCanvas(baseCanvas) {
   previewCtx.drawImage(baseCanvas, 0, 0);
   previewCtx.globalAlpha = getToolOpacity();
   previewCtx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
+  previewCtx.filter = currentTool === "airbrush" ? `blur(${getAirbrushBlurPx()}px)` : "none";
   previewCtx.drawImage(tempActionCanvas, 0, 0);
+  previewCtx.filter = "none";
   previewCtx.globalAlpha = 1;
   previewCtx.globalCompositeOperation = "source-over";
   return previewCanvas;
@@ -344,11 +346,6 @@ function hexToRgb(hex) {
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
 }
 
-function hexToRgba(hex, alpha) {
-  const [r, g, b] = hexToRgb(hex);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
 function getCanvasPoint(evt) {
   const rect = linesCanvas.getBoundingClientRect();
   const scaleX = artworkWidth / rect.width;
@@ -387,51 +384,49 @@ function drawActionSegment(from, to) {
 }
 
 // Airbrush: unlike the other tools, it keeps depositing paint the longer
-// it's held over one spot, like a real spray can, and lays down a soft
-// (radial-gradient) dab instead of a hard-edged line. Two things trigger
-// a dab: moving far enough from the last dab (so a normal drag gets
-// dense, consistent coverage no matter how fast it's moving - stamping
-// on a fixed timer alone left fast drags almost blank, since the pointer
-// had already moved on before the next tick), and a timer that fires
-// regardless of movement (so holding still keeps building up). Each dab
-// is low-alpha and drawn with normal source-over, so overlapping dabs
-// naturally build toward full opacity at the center while the feathered
-// edges stay gradual - no special blending trick needed.
+// it's held over one spot, like a real spray can. A single timer drives
+// it entirely (pointermove just updates the tracked target position) -
+// on each tick, it stamps solid dabs interpolated from the last stamp
+// position to wherever the pointer is now, so a drag gets dense, even
+// coverage no matter how fast it's moving, and holding still re-stamps
+// the same spot to build up. Softness doesn't come from the dabs
+// themselves (they're solid circles) - a blur filter is applied when
+// this gets composited/merged (see getAirbrushBlurPx and its call
+// sites), which gives a genuinely smooth gradient instead of a bumpy
+// outline from overlapping hard-edged circles.
 const AIRBRUSH_INTERVAL_MS = 30;
-const AIRBRUSH_DAB_ALPHA = 0.22;
+const AIRBRUSH_DAB_ALPHA = 0.35;
 let airbrushIntervalId = null;
 let lastAirbrushStampPoint = null;
+
+// Just enough blur to smooth away the bumps between individual dabs
+// (which land roughly brushSize*0.12 apart - see stampAirbrushToward),
+// without being so wide it dilutes the whole stroke's peak opacity.
+function getAirbrushBlurPx() {
+  return Number(brushSize.value) * 0.15;
+}
 
 function stampAirbrushDab(point) {
   const radius = getPressureAdjustedSize(point.pressure) / 2;
   if (radius <= 0) return;
 
-  const gradient = tempActionCtx.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius);
-  gradient.addColorStop(0, hexToRgba(colorPicker.value, AIRBRUSH_DAB_ALPHA));
-  gradient.addColorStop(1, hexToRgba(colorPicker.value, 0));
-
   tempActionCtx.globalCompositeOperation = "source-over";
-  tempActionCtx.globalAlpha = 1;
-  tempActionCtx.fillStyle = gradient;
+  tempActionCtx.globalAlpha = AIRBRUSH_DAB_ALPHA;
+  tempActionCtx.fillStyle = colorPicker.value;
   tempActionCtx.beginPath();
   tempActionCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
   tempActionCtx.fill();
+  tempActionCtx.globalAlpha = 1;
 
   lastAirbrushStampPoint = { ...point };
 }
 
-// Called from pointermove while airbrushing. Stamps a dab if the pointer
-// has moved far enough since the last one - the threshold scales with
-// the current brush size so dabs always overlap enough for solid
-// coverage, whether the brush is tiny or huge. If the pointer jumped
-// further than that in one move event (coarse pointer polling, or a
-// fast flick), stamps are interpolated along the path between the two
-// points instead of just at the endpoint, so fast strokes don't end up
-// as a dotted line with gaps.
-function maybeStampAirbrushDabForMove(point) {
+// Stamps toward `point`, interpolating from the last stamp position so a
+// fast move doesn't leave gaps, and stamping in place if the pointer
+// hasn't moved (so holding still keeps building up).
+function stampAirbrushToward(point) {
   if (!lastAirbrushStampPoint) {
     stampAirbrushDab(point);
-    compositePaint();
     return;
   }
 
@@ -444,7 +439,11 @@ function maybeStampAirbrushDabForMove(point) {
   const dx = point.x - startPoint.x;
   const dy = point.y - startPoint.y;
   const dist = Math.hypot(dx, dy);
-  if (dist < minSpacing) return;
+
+  if (dist < minSpacing) {
+    stampAirbrushDab(point);
+    return;
+  }
 
   const steps = Math.floor(dist / minSpacing);
   for (let i = 1; i <= steps; i++) {
@@ -454,7 +453,6 @@ function maybeStampAirbrushDabForMove(point) {
       pressure: point.pressure,
     });
   }
-  compositePaint();
 }
 
 function startAirbrushLoop() {
@@ -464,7 +462,7 @@ function startAirbrushLoop() {
       stopAirbrushLoop();
       return;
     }
-    stampAirbrushDab(smoothedPoint);
+    stampAirbrushToward(smoothedPoint);
     compositePaint();
   }, AIRBRUSH_INTERVAL_MS);
 }
@@ -486,7 +484,9 @@ function mergeActionIntoActiveLayer() {
 
   ctx.globalAlpha = getToolOpacity();
   ctx.globalCompositeOperation = currentTool === "eraser" ? "destination-out" : "source-over";
+  ctx.filter = currentTool === "airbrush" ? `blur(${getAirbrushBlurPx()}px)` : "none";
   ctx.drawImage(tempActionCanvas, 0, 0);
+  ctx.filter = "none";
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
 
@@ -581,8 +581,10 @@ function attachPointerHandlers() {
     };
 
     if (currentTool === "airbrush") {
+      // stampAirbrushToward (driven by the interval in startAirbrushLoop)
+      // handles all stamping and compositing on its own steady cadence -
+      // this just keeps the tracked target position current.
       smoothedPoint = next;
-      maybeStampAirbrushDabForMove(next);
       return;
     }
 

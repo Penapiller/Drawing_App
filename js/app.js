@@ -395,20 +395,28 @@ function drawActionSegment(from, to) {
 // sites), which gives a genuinely smooth gradient instead of a bumpy
 // outline from overlapping hard-edged circles.
 const AIRBRUSH_INTERVAL_MS = 30;
-const AIRBRUSH_DAB_ALPHA = 0.35;
+const AIRBRUSH_DAB_ALPHA = 0.5;
 let airbrushIntervalId = null;
 let lastAirbrushStampPoint = null;
 
-// Just enough blur to smooth away the bumps between individual dabs
-// (which land roughly brushSize*0.12 apart - see stampAirbrushToward),
-// without being so wide it dilutes the whole stroke's peak opacity.
+// Blur radius for softening the stroke - wider than just enough to
+// smooth the bumps between dabs, for a gentler transition. Dab alpha is
+// raised to compensate, since a wider blur dilutes peak opacity more.
 function getAirbrushBlurPx() {
-  return Number(brushSize.value) * 0.15;
+  return Number(brushSize.value) * 0.28;
 }
 
 function stampAirbrushDab(point) {
-  const radius = getPressureAdjustedSize(point.pressure) / 2;
-  if (radius <= 0) return;
+  const nominalRadius = getPressureAdjustedSize(point.pressure) / 2;
+  if (nominalRadius <= 0) return;
+
+  // Drawn larger than the nominal brush size, since the blur applied at
+  // composite time (see getAirbrushBlurPx) softens inward from the edge
+  // by roughly its own radius - without this, a wide blur would eat
+  // into and dilute the whole dab instead of just feathering its edge,
+  // and the stroke could never reach solid coverage no matter how long
+  // it's held.
+  const radius = nominalRadius + getAirbrushBlurPx();
 
   tempActionCtx.globalCompositeOperation = "source-over";
   tempActionCtx.globalAlpha = AIRBRUSH_DAB_ALPHA;
